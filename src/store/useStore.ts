@@ -33,6 +33,7 @@ type LocalOrder = {
   customer: Customer
   plate: CookedIngredient[]
   fulfilled: boolean
+  plateNutrition: Nutrition
 }
 
 type Store = {
@@ -41,6 +42,9 @@ type Store = {
   orders: LocalOrder[]
   activeOrderId: string | null
   methods: { [id: string]: string }
+  tipJar: number
+  lastTip: number | null
+  lastResult: 'success' | 'fail' | null
   setActiveOrderId: (id: string) => void
   addOrder: (customer: Customer) => void
   removeOrder: (id: string) => void
@@ -48,6 +52,7 @@ type Store = {
   removeFromPlate: (idx: number) => void
   finishOrder: () => void
   setMethod: (ingredientId: string, method: string) => void
+  resetResult: () => void
 }
 
 // Nutrition modification logic for cooking methods
@@ -72,6 +77,35 @@ function cookNutrition(base: Nutrition, method: 'raw' | 'boil' | 'fry' | 'bake')
     default:
       return base
   }
+}
+
+function calculateTip(goal: Record<string, number>, plate: Record<string, number>) {
+  let allMet = true
+  let totalPercent = 0
+  let count = 0
+  for (const key in goal) {
+    if (key === 'sugar') {
+      if (plate.sugar > 0) {
+        allMet = false
+        break
+      } else {
+        totalPercent += 1
+        count++
+      }
+    } else {
+      const want = goal[key] ?? 0
+      const got = plate[key] ?? 0
+      if (got < want) {
+        allMet = false
+        break
+      }
+      totalPercent += Math.min(1, want / got)
+      count++
+    }
+  }
+  if (!allMet) return 0
+  const avgPercent = totalPercent / (count || 1)
+  return Math.round(10 + 15 * avgPercent)
 }
 
 const useStore = create<Store>((set, get) => ({
@@ -101,6 +135,9 @@ const useStore = create<Store>((set, get) => ({
   orders: [],
   activeOrderId: null,
   methods: {},
+  tipJar: 0,
+  lastTip: null,
+  lastResult: null,
   setActiveOrderId: (id) => set({ activeOrderId: id }),
   addOrder: (customer) =>
     set((state) => ({
@@ -111,6 +148,7 @@ const useStore = create<Store>((set, get) => ({
           customer,
           plate: [],
           fulfilled: false,
+          plateNutrition: { protein: 0, carbs: 0, fat: 0, sugar: 0, vitamins: 0 },
         },
       ],
       activeOrderId: customer.id,
@@ -126,44 +164,79 @@ const useStore = create<Store>((set, get) => ({
       return { orders: filtered, activeOrderId: newActive }
     }),
   handleAddToPlate: (ingredientId, method) =>
+    set((state) => {
+      const ingredient = state.ingredients.find((i) => i.id === ingredientId)!
+      const cookedNutrition = cookNutrition(ingredient.baseNutrition, method as any)
+      return {
+        orders: state.orders.map((order) =>
+          order.id === state.activeOrderId
+            ? {
+              ...order,
+              plate: [
+                ...order.plate,
+                {
+                  ...ingredient,
+                  cookedNutrition,
+                  method,
+                },
+              ],
+              plateNutrition: order.plate
+                .concat([{ ...ingredient, cookedNutrition }])
+                .reduce(
+                  (acc, ing) => {
+                    for (const key in acc) {
+                      acc[key as keyof typeof acc] += ing.cookedNutrition[key as keyof typeof acc] || 0
+                    }
+                    return acc
+                  },
+                  { protein: 0, carbs: 0, fat: 0, sugar: 0, vitamins: 0 }
+                ),
+            }
+            : order
+        ),
+      }
+    }),
+  removeFromPlate: (idx) =>
     set((state) => ({
       orders: state.orders.map((order) =>
         order.id === state.activeOrderId
           ? {
             ...order,
-            plate: [
-              ...order.plate,
-              {
-                ...state.ingredients.find((i) => i.id === ingredientId)!,
-                cookedNutrition: cookNutrition(
-                  state.ingredients.find((i) => i.id === ingredientId)!.baseNutrition,
-                  method as any
-                ),
-                method,
-              },
-            ],
+            plate: order.plate.filter((_, i) => i !== idx),
+            plateNutrition: order.plate
+              .filter((_, i) => i !== idx)
+              .reduce(
+                (acc, ing) => {
+                  for (const key in acc) {
+                    acc[key as keyof typeof acc] += ing.cookedNutrition[key as keyof typeof acc] || 0
+                  }
+                  return acc
+                },
+                { protein: 0, carbs: 0, fat: 0, sugar: 0, vitamins: 0 }
+              ),
           }
           : order
       ),
     })),
-  removeFromPlate: (idx) =>
-    set((state) => ({
-      orders: state.orders.map((order) =>
-        order.id === state.activeOrderId
-          ? { ...order, plate: order.plate.filter((_, i) => i !== idx) }
-          : order
-      ),
-    })),
   finishOrder: () =>
-    set((state) => ({
-      orders: state.orders.map((order) =>
-        order.id === state.activeOrderId ? { ...order, fulfilled: true } : order
-      ),
-    })),
+    set((state) => {
+      const order = state.orders.find((o) => o.id === state.activeOrderId)
+      if (!order) return {}
+      const tip = calculateTip(order.customer.goal, order.plateNutrition)
+      return {
+        orders: state.orders.map((o) =>
+          o.id === state.activeOrderId ? { ...o, fulfilled: true } : o
+        ),
+        tipJar: tip > 0 ? state.tipJar + tip : state.tipJar,
+        lastTip: tip > 0 ? tip : 0,
+        lastResult: tip > 0 ? 'success' : 'fail',
+      }
+    }),
   setMethod: (ingredientId, method) =>
     set((state) => ({
       methods: { ...state.methods, [ingredientId]: method },
     })),
+  resetResult: () => set({ lastTip: null, lastResult: null }),
 }))
 
 export default useStore

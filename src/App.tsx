@@ -46,38 +46,6 @@ function randomCustomer() {
   }
 }
 
-function calculateTip(goal: Record<string, number>, plate: Record<string, number>) {
-  // If any goal is not met, tip is 0
-  let allMet = true
-  let totalPercent = 0
-  let count = 0
-  for (const key in goal) {
-    if (key === 'sugar') {
-      if (plate.sugar > 0) {
-        allMet = false
-        break
-      } else {
-        totalPercent += 1
-        count++
-      }
-    } else {
-      const want = goal[key] ?? 0
-      const got = plate[key] ?? 0
-      if (got < want) {
-        allMet = false
-        break
-      }
-      // The closer to the goal, the better (over-serving doesn't penalize)
-      totalPercent += Math.min(1, want / got)
-      count++
-    }
-  }
-  if (!allMet) return 0
-  // Score: 10 (barely met) to 25 (perfectly matched)
-  const avgPercent = totalPercent / (count || 1)
-  return Math.round(10 + 15 * avgPercent)
-}
-
 function App() {
   const {
     orders,
@@ -91,53 +59,27 @@ function App() {
     removeFromPlate,
     finishOrder,
     setMethod,
+    tipJar,
+    lastTip,
+    lastResult,
+    resetResult,
   } = useStore()
 
-  const [lastTip, setLastTip] = React.useState<number | null>(null)
-  const [lastResult, setLastResult] = React.useState<'success' | 'fail' | null>(null)
-
   const activeOrder = orders.find(o => o.id === activeOrderId)
-
-  // Calculate nutrition for active order
-  const plateNutrition = React.useMemo(() => {
-    if (!activeOrder) return { protein: 0, carbs: 0, fat: 0, sugar: 0, vitamins: 0 }
-    const total = { protein: 0, carbs: 0, fat: 0, sugar: 0, vitamins: 0 }
-    for (const ing of activeOrder.plate) {
-      for (const key of Object.keys(total) as (keyof typeof total)[]) {
-        total[key] += ing.cookedNutrition?.[key] || 0
-      }
-    }
-    return total
-  }, [activeOrder])
 
   React.useEffect(() => {
     if (orders.length === 0) addOrder(randomCustomer())
     // eslint-disable-next-line
   }, [])
 
-  const handleFinishOrder = () => {
-    if (!activeOrder) return
-    finishOrder()
-    const goal = activeOrder.customer.goal
-    const tip = calculateTip(goal, plateNutrition)
-    setLastTip(tip)
-    setLastResult(tip > 0 ? 'success' : 'fail')
-  }
-
-  const handleNextOrder = () => {
-    if (!activeOrder) return
-    removeOrder(activeOrder.id)
-    setLastTip(null)
-    setLastResult(null)
-    // If no more orders, add a new one
-    if (orders.length <= 1) addOrder(randomCustomer())
-  }
-
   return (
     <main className="max-w-3xl mx-auto py-8 px-2">
       <div className="flex justify-between items-center mb-4">
         <h1 className="text-2xl font-bold">Nutrition Game</h1>
-        <Button onClick={() => addOrder(randomCustomer())}>Add New Order</Button>
+        <div className="flex items-center gap-4">
+          <span className="font-semibold">Tip Jar: <span className="font-mono">{tipJar}</span></span>
+          <Button onClick={() => addOrder(randomCustomer())}>Add New Order</Button>
+        </div>
       </div>
       <div className="flex gap-4">
         {/* Orders List */}
@@ -248,7 +190,7 @@ function App() {
                   </ul>
                   <strong>Total Nutrition:</strong>
                   <ul className="list-disc ml-6">
-                    {Object.entries(plateNutrition).map(([k, v]) => (
+                    {Object.entries(activeOrder.plateNutrition || {}).map(([k, v]) => (
                       <li key={k}>
                         {k}: {v}
                       </li>
@@ -258,7 +200,7 @@ function App() {
               </CardContent>
               <CardFooter className="flex flex-col gap-2">
                 {!activeOrder.fulfilled ? (
-                  <Button onClick={handleFinishOrder}>Finish Order</Button>
+                  <Button onClick={() => finishOrder()}>Finish Order</Button>
                 ) : (
                   <div className="w-full flex flex-col items-center gap-2">
                     {lastResult === 'success' && (
@@ -272,7 +214,7 @@ function App() {
                         Order Not Fulfilled. Customer leaves, no tip.
                       </h3>
                     )}
-                    <Button onClick={handleNextOrder}>Next Customer</Button>
+                      <Button onClick={() => { removeOrder(activeOrder.id); resetResult(); if (orders.length <= 1) addOrder(randomCustomer()) }}>Next Customer</Button>
                   </div>
                 )}
               </CardFooter>
